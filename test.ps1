@@ -1,0 +1,1 @@
+Send-MailMessage -To 'test@example.com' -From 'testtest@example.com' -Subject 'kia ora' -Body 'lorem ipsum!' -SmtpServer '127.0.0.1' -Port 25
