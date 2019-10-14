@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
+#include <shlwapi.h>
 #include <winsock2.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -16,10 +17,11 @@
 #include <uxtheme.h>
 #include <tchar.h>
 
-#define USETRACE
+//#define USETRACE
 
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "ws2_32.lib")
 
 #pragma warning(disable: 4355)
@@ -93,6 +95,8 @@ void Trace(__in __format_string const char* format, ...)
 
 void error(const char* what, DWORD code)
 {
+    what, code;
+#ifdef USETRACE
     TCHAR codestr[30];
     if (code & 0x80000000) {
         ::StringCchPrintf(codestr, _countof(codestr), _T("0x%08x"), code);
@@ -102,16 +106,23 @@ void error(const char* what, DWORD code)
     TCHAR buffer[1024];
     ::FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, code, 0, buffer, _countof(buffer), NULL);
     TRACE("%hs() failed with error %s\n%s\n", what, codestr, buffer);
+#endif
 }
 
 void serror(const char* what)
 {
+    what;
+#ifdef USETRACE
     error(what, WSAGetLastError());
+#endif
 }
 
 void werror(const char* what)
 {
+    what;
+#ifdef USETRACE
     error(what, GetLastError());
+#endif
 }
 
 class WSAInitialiser
@@ -443,7 +454,9 @@ private:
     char* sender;
     char* recipient;
     char* body;
+    wchar_t* subject;
     bool inData;
+    bool read;
     FILETIME time;
 
     static char* StrDupN(__in_ecount(cch) const char* src, size_t cch) throw()
@@ -479,31 +492,48 @@ public:
         : sender()
         , recipient()
         , body()
+        , subject()
         , inData()
+        , read()
     {
         ZeroMemory(&this->time, sizeof(this->time));
     }
     ~MailMessage()
     {
+        ::free(this->subject);
         ::free(this->sender);
         ::free(this->recipient);
         ::free(this->body);
     }
-    const char* GetSender() throw()
+    const char* GetSender() const throw()
     {
         return this->sender;
     }
-    const char* GetRecipient() throw()
+    const char* GetRecipient() const throw()
     {
         return this->recipient;
     }
-    const char* GetBody() throw()
+    const char* GetBody() const throw()
     {
         return this->body;
     }
-    FILETIME GetTime() throw()
+    const wchar_t* GetSubject() const throw()
+    {
+        return this->subject;
+    }
+    FILETIME GetTime() const throw()
     {
         return this->time;
+    }
+    bool IsRead() const throw()
+    {
+        return this->read;
+    }
+    bool SetRead(bool read = true) throw()
+    {
+        bool oldState = this->read;
+        this->read = read;
+        return oldState;
     }
     bool SetSender(const char* data) throw()
     {
@@ -544,7 +574,76 @@ public:
         bool ret = this->AppendBody(data);
         ::GetSystemTimeAsFileTime(&this->time);
         this->inData = false;
+        this->ParseSubject();
         return ret;
+    }
+    static wchar_t* ParseUnstructured(__inout wchar_t* string)
+    {
+        const wchar_t* src = string;
+        wchar_t* dst = string;
+
+        while (*src != 0) {
+            if (src[0] == L'\r' && src[1] == L'\n') {
+                if (src[2] != L' ') {
+                    break;
+                }
+                src += 2;
+                continue;
+            }
+            *dst++ = *src++;
+        }
+        *dst = 0;
+        return string;
+    }
+    void ParseSubject() throw()
+    {
+        if (this->body == NULL) {
+            return;
+        }
+        const char* head = this->body;
+        for (; *head != 0; head++) {
+            if (head[0] != '\r' || head[1] != '\n') {
+                continue;
+            }
+            if (head[0] == '\r' && head[1] == '\n' && head[2] == '\r' && head[3] == '\n') {
+                return;
+            }
+            for (head += 2; *head == '\t' || *head == ' '; head++);
+            if (::strncmp("Subject", head, 7) != 0) {
+                continue;
+            }
+            break;
+        }
+        if (*head == 0) {
+            return;
+        }
+        for (head += 7; *head == '\t' || *head == ' '; head++);
+        if (*head != ':') {
+            return;
+        }
+        for (head++; *head == '\t' || *head == ' '; head++);
+        const char* tail = head;
+        while (*tail != 0) {
+            if (tail[0] == '\r' && tail[1] == '\n') {
+                if (tail[2] != ' ') {
+                    break;
+                }
+                tail += 3;
+                continue;
+            }
+            tail++;
+        }
+        const UINT CP_ASCII = 20127;
+        int cch = ::MultiByteToWideChar(CP_ASCII, 0, head, tail - head, NULL, 0);
+        if (cch <= 0 || cch >= INT_MAX) {
+            return;
+        }
+        this->subject = static_cast<wchar_t*>(::calloc(cch + 1, sizeof(wchar_t)));
+        if (this->subject != NULL) {
+            int ret = ::MultiByteToWideChar(CP_ASCII, 0, head, tail - head, this->subject, cch + 1);
+            this->subject[__min(cch, __max(ret, 0))] = 0;
+            ParseUnstructured(this->subject);
+        }
     }
 };
 
@@ -1101,6 +1200,15 @@ private:
     typedef PtrArray<MailMessage, 16, TPtrArrayAutoDeleteHelper<MailMessage>> MailMessageArray;
     typedef PtrArray<MailMessage, 16, TPtrArrayDestroyHelper<MailMessage>> FilteredMailMessageArray;
 
+    enum ImageIndex
+    {
+        MAIL_UNREAD = 0,
+        MAIL_READ = 1,
+        MAIL_ATTACH = 2,
+        MAIL_ERROR = 3,
+        MAIL_WARN = 4,
+    };
+
     SearchEdit search;
     HWND hwnd;
     HWND searchEdit;
@@ -1108,8 +1216,12 @@ private:
     HWND status;
     HWND contentView;
     HMENU popup;
+    HFONT monoFont;
     bool shown;
-    int splitter;
+    int splitterPos;
+    int splitterDragPos;
+    int splitterDragPosOld;
+    int splitterProportionalPos;
     SockerListener listener;
     MailMessageArray messages;
     FilteredMailMessageArray filter;
@@ -1123,8 +1235,20 @@ private:
 
         StatusBar::SetText(this->status, StatusBar::PART_STAT, L"Initialising...");
 
+        LOGFONTW lf = {};
+        ::GetObjectW(GetStockFont(SYSTEM_FIXED_FONT), sizeof(lf), &lf);
+        lf.lfWidth = 0;
+        lf.lfWeight = 0;
+        lf.lfCharSet = ANSI_CHARSET;
+        lf.lfQuality = DEFAULT_QUALITY;
+        lf.lfPitchAndFamily = FIXED_PITCH;
+        ::StringCchCopyW(lf.lfFaceName, LF_FACESIZE, L"Consolas");
+        this->monoFont = ::CreateFontIndirect(&lf);
+        SetWindowFont(this->contentView, this->monoFont, false);
+
         PCZZTSTR colNames = _T("Subject\0Sender\0Recipient\0Time\0Size\0");
         int colWidths[] = { 40, 20, 20, 15, 5 };
+
         RECT rect = {};
         ::GetClientRect(this->listView, &rect);
         if ((GetWindowStyle(this->listView) & WS_VSCROLL) == 0) {
@@ -1138,7 +1262,7 @@ private:
         for (i = 0; *colNames != 0; i++) {
             LVCOLUMN lvcol;
             lvcol.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
-            lvcol.fmt = LVCFMT_LEFT;
+            lvcol.fmt = i == 4 ? LVCFMT_RIGHT : LVCFMT_LEFT;
             lvcol.cx = ::MulDiv(colWidths[i], rect.right, 100);
             lvcol.pszText = (LPTSTR)(colNames);
             lvcol.cchTextMax = 0;
@@ -1149,15 +1273,30 @@ private:
             }
         }
 
-        if (this->listener.Listen(25) == false) {
+        HWND header = ListView_GetHeader(this->listView);
+        if (header != NULL) {
+            for (int i = 0; ; i++) {
+                HDITEM item = { HDI_FORMAT };
+                if (Header_GetItem(header, i, &item) == FALSE) {
+                    break;
+                }
+                item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+                if (i == 3) {
+                    item.fmt |= HDF_SORTDOWN;
+                }
+                Header_SetItem(header, i, &item);
+            }
+        }
+        ListView_SetSelectedColumn(this->listView, 3);
+
+        const UINT16 port = 1025;
+        if (this->listener.Listen(port) == false) {
             ::PostMessage(hwnd, WM_CLOSE, 0, 0);
             return E_FAIL;
         }
 
-        // FAIL_HR(hr = ::ImageList_CoCreateInstance(CLSID_ImageList, NULL, IID_PPV_ARGS(&this->imageList)));
-        // FAIL_HR(hr = this->imageList->Initialize(IMGWIDTH, IMGHEIGHT, ILC_COLOR32 | ILC_MASK, 0, 0));
-
-        // ListView_SetImageList(this->listView, IImageListToHIMAGELIST(this->imageList), LVSIL_NORMAL);
+        HIMAGELIST himl = ::ImageList_LoadImage(HINST_THISCOMPONENT, MAKEINTRESOURCE(IDB_MAILICONS), 16, 0, 0, IMAGE_BITMAP, LR_CREATEDIBSECTION);
+        ListView_SetImageList(this->listView, himl, LVSIL_SMALL);
 
         this->PopulateItems(hwnd);
 
@@ -1167,34 +1306,63 @@ private:
 
     void PopulateItems(HWND hwnd) throw()
     {
-        wchar_t text[256];
-        Edit_GetText(this->searchEdit, text, _countof(text));
-        wchar_t* query = text[0] != L'\0' ? text : NULL;
+        // wchar_t text[256];
+        // Edit_GetText(this->searchEdit, text, _countof(text));
+        // wchar_t* query = text[0] != L'\0' ? text : NULL;
+        char text[256];
+        ::GetWindowTextA(this->searchEdit, text, _countof(text));
+        const char* query = text[0] != '\0' ? text : NULL;
+
+        int index = ListView_GetNextItem(this->listView, -1, LVNI_SELECTED | LVNI_FOCUSED);
+        if (index < 0) {
+            index = ListView_GetNextItem(this->listView, -1, LVNI_SELECTED);
+        }
+        MailMessage* selectedMessage = this->filter.GetAt(index);
+        int selectedIndex = -1;
 
         this->filter.RemoveAll();
 
         // const bool regex = query != NULL && ::wcspbrk(query, L"^$.?*+") != NULL;
         for (int n = this->messages.GetCount(); --n >= 0; ) {
             MailMessage* message = this->messages.FastGetAt(n);
+            bool matches = true;
             if (query != NULL) {
                 // const wchar_t* matched = regex ? ::match(name, query) : ::StrStrIW(name, query);
-                // const wchar_t* matched = ::StrStrIW(name, query);
-                // if (matched == NULL) {
-                //     continue;
-                // }
+                const char* found;
+                found = ::StrStrIA(message->GetSender(), query);
+                if (found == NULL) {
+                    found = ::StrStrIA(message->GetRecipient(), query);
+                    if (found == NULL) {
+                        found = ::StrStrIA(message->GetBody(), query);
+                        if (found == NULL) {
+                            matches = false;
+                        }
+                    }
+                }
             }
-            this->filter.Add(message);
+            if (matches) {
+                if (selectedMessage == message) {
+                    selectedIndex = this->filter.GetCount();
+                }
+                this->filter.Add(message);
+            }
         }
 
         const int listCount = this->filter.GetCount();
         SetWindowRedraw(this->listView, false);
         ListView_SetItemCount(this->listView, listCount);
-        ListView_SetItemState(this->listView, 0, LVIS_FOCUSED, LVIS_FOCUSED);
-        ListView_EnsureVisible(this->listView, 0, false);
+        if (selectedIndex >= 0) {
+            ListView_SetItemState(this->listView, selectedIndex, LVNI_SELECTED | LVNI_FOCUSED, LVNI_SELECTED | LVNI_FOCUSED);
+            ListView_EnsureVisible(this->listView, selectedIndex, false);
+        } else {
+            ListView_SetItemState(this->listView, 0, LVIS_FOCUSED, LVIS_FOCUSED);
+            ListView_EnsureVisible(this->listView, 0, false);
+        }
         SetWindowRedraw(this->listView, true);
 
-        ::StringCchPrintfW(text, _countof(text), L"%d emails", listCount);
-        StatusBar::SetText(this->status, StatusBar::PART_ALL, text);
+        wchar_t buffer[64];
+        ::StringCchPrintfW(buffer, _countof(buffer), L"%d emails", listCount);
+        StatusBar::SetText(this->status, StatusBar::PART_ALL, buffer);
         this->UpdateStatus(hwnd);
     }
 
@@ -1212,11 +1380,13 @@ private:
             index = ListView_GetNextItem(this->listView, -1, LVNI_SELECTED);
         }
         MailMessage* message = this->filter.GetAt(index);
+        SetWindowRedraw(this->contentView, false);
         if (message != NULL) {
             ::SetWindowTextA(this->contentView, message->GetBody());
         } else {
             ::SetWindowTextA(this->contentView, NULL);
         }
+        SetWindowRedraw(this->contentView, true);
         StatusBar::SetText(this->status, StatusBar::PART_SEL, text);
     }
 
@@ -1226,9 +1396,8 @@ private:
         ::SendMessage(this->status, WM_SIZE, 0, 0);
         RECT rect;
         ::GetEffectiveClientRect(hwnd, &rect, this->ctlArray);
-        this->splitter = rect.top + (rect.bottom - rect.top + 2) / 3;
-        ::MoveWindow(this->listView, rect.left, rect.top, rect.right - rect.left, this->splitter - rect.top, TRUE);
-        ::MoveWindow(this->contentView, rect.left, this->splitter + SPLITTER_HEIGHT, rect.right - rect.left, rect.bottom - this->splitter - SPLITTER_HEIGHT, TRUE);
+        ::MoveWindow(this->listView, rect.left, rect.top, rect.right - rect.left, this->splitterPos - rect.top, TRUE);
+        ::MoveWindow(this->contentView, rect.left, this->splitterPos + SPLITTER_HEIGHT, rect.right - rect.left, rect.bottom - this->splitterPos - SPLITTER_HEIGHT, TRUE);
     }
 
     LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) throw()
@@ -1238,6 +1407,7 @@ private:
         HANDLE_MSG(hwnd, WM_DESTROY, OnDestroy);
         HANDLE_MSG(hwnd, WM_COMMAND, OnCommand);
         HANDLE_MSG(hwnd, WM_ERASEBKGND, OnEraseBackground);
+        HANDLE_MSG(hwnd, WM_CTLCOLORSTATIC, OnCtlColorStatic);
         HANDLE_MSG(hwnd, WM_WINDOWPOSCHANGED, OnWindowPosChanged);
         HANDLE_MSG(hwnd, WM_SETTINGCHANGE, OnSettingChange);
         HANDLE_MSG(hwnd, WM_ACTIVATE, OnActivate);
@@ -1245,6 +1415,9 @@ private:
         HANDLE_MSG(hwnd, WM_INITMENU, OnInitMenu);
         HANDLE_MSG(hwnd, WM_INITMENUPOPUP, OnInitMenuPopup);
         HANDLE_MSG(hwnd, WM_CONTEXTMENU, OnContextMenu);
+        HANDLE_MSG(hwnd, WM_MOUSEMOVE, OnMouseMove);
+        HANDLE_MSG(hwnd, WM_LBUTTONDOWN, OnLButtonDown);
+        HANDLE_MSG(hwnd, WM_LBUTTONUP, OnLButonUp);
         }
         return ::DefWindowProc(hwnd, message, wParam, lParam);
     }
@@ -1267,7 +1440,7 @@ private:
         }
         this->listView = ::CreateWindowEx(0, WC_LISTVIEW, NULL,
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN
-            | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_AUTOARRANGE | LVS_ALIGNTOP | LVS_SHAREIMAGELISTS | LVS_OWNERDATA,
+            | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_AUTOARRANGE | LVS_ALIGNTOP | LVS_OWNERDATA,
             0, 0, 0, 0,
             hwnd,
             reinterpret_cast<HMENU>(IntToPtr(IDC_LISTVIEW)),
@@ -1285,7 +1458,6 @@ private:
         if (this->contentView == NULL) {
             return false;
         }
-        SetWindowFont(this->contentView, GetStockFont(FIXED_PITCH), false);
         this->status = StatusBar::Create(hwnd, IDC_STATUSBAR);
         if (this->status == NULL) {
             return false;
@@ -1302,6 +1474,10 @@ private:
         this->ctlArray[5] = IDC_STATUSBAR;
         this->ctlArray[6] = 0;
         this->ctlArray[7] = 0;
+
+        RECT rect = {};
+        ::GetEffectiveClientRect(hwnd, &rect, this->ctlArray);
+        this->splitterPos = rect.top + (rect.bottom - rect.top + 2) / 3;
 
         ::SetWindowTheme(this->listView, L"Explorer", NULL);
         ListView_SetExtendedListViewStyle(this->listView, LVS_EX_FULLROWSELECT | LVS_EX_INFOTIP | LVS_EX_UNDERLINEHOT | LVS_EX_DOUBLEBUFFER | LVS_EX_JUSTIFYCOLUMNS | LVS_EX_AUTOSIZECOLUMNS | LVS_EX_COLUMNSNAPPOINTS);
@@ -1325,6 +1501,9 @@ private:
         case IDM_COPY_NAME:
         case IDA_COPY_NAME:
             this->OnCommandCopyName(hwnd, id);
+            break;
+        case IDM_CLEAR:
+            this->OnCommandClear(hwnd, id);
             break;
         case IDM_EXIT_APP:
             this->OnCommandExitApp(hwnd, id);
@@ -1355,6 +1534,12 @@ private:
             return;
         }
 
+    }
+
+    void OnCommandClear(HWND hwnd, int) throw()
+    {
+        this->messages.RemoveAll();
+        this->PopulateItems(hwnd);
     }
 
     void OnWindowPosChanged(HWND hwnd, const WINDOWPOS* pwp) throw()
@@ -1412,31 +1597,15 @@ private:
         }
     }
 
-    inline static COLORREF half_color(COLORREF clr)
+    inline static COLORREF half_color(COLORREF clr) throw()
     {
         return ((clr >> 1) & 0x7F7F7F);
     }
 
-    inline static COLORREF quarter_color(COLORREF clr)
-    {
-        return ((clr >> 2) & 0x3F3F3F);
-    }
-
-    inline static COLORREF eighth_color(COLORREF clr)
-    {
-        return ((clr >> 3) & 0x1F1F1F);
-    }
-
-    static COLORREF BlendColor_1_1(COLORREF clr1, COLORREF clr2)
+    static COLORREF BlendColor_1_1(COLORREF clr1, COLORREF clr2) throw()
     {
         // clr1 / 2 + clr2 / 2
         return half_color(clr1) + half_color(clr2);
-    }
-
-    static COLORREF BlendColor_3_1(COLORREF clr1, COLORREF clr2)
-    {
-        // clr1 / 2 + clr1 / 4 + clr2 / 4
-        return half_color(clr1) + quarter_color(clr1) + quarter_color(clr2);
     }
 
     BOOL OnEraseBackground(HWND hwnd, HDC hdc) throw()
@@ -1445,14 +1614,19 @@ private:
         ::GetClientRect(hwnd, &rect);
         HBRUSH oldbrush = SelectBrush(hdc, GetStockBrush(DC_BRUSH));
         COLORREF oldcolour = SetDCBrushColor(hdc, ::GetSysColor(COLOR_WINDOW));
-        ::PatBlt(hdc, 0, this->splitter, rect.right, SPLITTER_HEIGHT, PATCOPY);
+        ::PatBlt(hdc, 0, this->splitterPos, rect.right, SPLITTER_HEIGHT, PATCOPY);
         COLORREF colour = BlendColor_1_1(::GetSysColor(COLOR_WINDOW), ::GetSysColor(COLOR_BTNFACE));
         SetDCBrushColor(hdc, colour);
-        ::PatBlt(hdc, 0, this->splitter + SPLITTER_HEIGHT / 2, rect.right, 1, PATCOPY);
+        ::PatBlt(hdc, 0, this->splitterPos + SPLITTER_HEIGHT / 2, rect.right, 1, PATCOPY);
         rect.bottom = rect.top + 1;
         SetDCBrushColor(hdc, oldcolour);
         SelectBrush(hdc, oldbrush);
         return true;
+    }
+
+    HBRUSH OnCtlColorStatic(HWND, HDC, HWND, int) throw()
+    {
+        return ::GetSysColorBrush(COLOR_WINDOW);
     }
 
     void OnSettingChange(HWND hwnd, UINT, LPCTSTR) throw()
@@ -1479,6 +1653,8 @@ private:
             return this->OnNotifyListViewItemChanged(hwnd, CONTAINING_RECORD(pnmhdr, NMLISTVIEW, hdr));
         case LVN_GETDISPINFOW:
             return this->OnNotifyListViewGetDispInfo(hwnd, CONTAINING_RECORD(pnmhdr, NMLVDISPINFOW, hdr));
+        case LVN_GETEMPTYMARKUP:
+            return this->OnGetEmptyMarkUp(hwnd, CONTAINING_RECORD(pnmhdr, NMLVEMPTYMARKUP, hdr));
         }
         return 0;
     }
@@ -1487,6 +1663,10 @@ private:
     {
         if ((lplv->uChanged & LVIF_STATE) != 0) {
             if (((lplv->uNewState ^ lplv->uOldState) & LVIS_SELECTED) == LVIS_SELECTED) {
+                MailMessage* message = this->filter.GetAt(lplv->iItem);
+                if (message != NULL && message->SetRead() == false) {
+                    ListView_Update(this->listView, lplv->iItem);
+                }
                 this->UpdateStatus(hwnd);
             }
         }
@@ -1502,6 +1682,9 @@ private:
         const UINT CP_ASCII = 20127;
         if (lplvdi->item.mask & LVIF_TEXT) {
             switch (lplvdi->item.iSubItem) {
+            case 0:
+                ::StringCchCopyW(lplvdi->item.pszText, lplvdi->item.cchTextMax, message->GetSubject());
+                break;
             case 1:
                 ::MultiByteToWideChar(CP_ASCII, 0, message->GetSender(), -1, lplvdi->item.pszText, lplvdi->item.cchTextMax);
                 break;
@@ -1523,15 +1706,28 @@ private:
                 }
                 break;
             case 4:
-                ::StringCchPrintfW(lplvdi->item.pszText, lplvdi->item.cchTextMax, _T("%Iu"), ::strlen(message->GetBody()));
+                ::StrFormatKBSizeW(::strlen(message->GetBody()), lplvdi->item.pszText, lplvdi->item.cchTextMax);
                 break;
             }
         }
         if (lplvdi->item.mask & LVIF_IMAGE) {
-            // lplvdi->item.iImage = this->LoadImage(fi);
+            if (message->IsRead()) {
+                lplvdi->item.iImage = MAIL_READ;
+            } else {
+                lplvdi->item.iImage = MAIL_UNREAD;
+            }
         }
-        lplvdi->item.mask |= LVIF_DI_SETITEM;
+        // lplvdi->item.mask |= LVIF_DI_SETITEM;
         return 0;
+    }
+
+    LRESULT OnGetEmptyMarkUp(HWND, NMLVEMPTYMARKUP* lplvem) throw()
+    {
+        lplvem->dwFlags = EMF_CENTERED;
+        if (::LoadString(HINST_THISCOMPONENT, IDS_NOEMAILS, lplvem->szMarkup, _countof(lplvem->szMarkup)) <= 0) {
+            return false;
+        }
+        return true;
     }
 
     void OnInitMenu(HWND, HMENU) throw()
@@ -1564,7 +1760,65 @@ private:
             pt.y = rcItem.top  + (rcItem.bottom - rcItem.top) / 2;
             ::ClientToScreen(this->listView, &pt);
         }
-        // ::TrackPopupMenuEx(this->popup, TPM_RIGHTBUTTON | TPM_LEFTBUTTON, pt.x, pt.y, hwnd, NULL);
+        ::TrackPopupMenuEx(this->popup, TPM_RIGHTBUTTON | TPM_LEFTBUTTON, pt.x, pt.y, hwnd, NULL);
+    }
+
+    int CalcSplitterPos(HWND hwnd, int pos) throw()
+    {
+        const int SPLITTER_MIN = 70;
+        if (pos < SPLITTER_MIN) {
+            return SPLITTER_MIN;
+        }
+        RECT rect = {};
+        GetClientRect(hwnd, &rect);
+        rect.bottom -= SPLITTER_MIN;
+        if (pos > rect.bottom) {
+            return rect.bottom;
+        }
+        return pos;
+    }
+
+    void OnLButtonDown(HWND hwnd, BOOL, int, int y, UINT) throw()
+    {
+        const int pos = this->CalcSplitterPos(hwnd, y);
+        this->splitterDragPos = y;
+        this->splitterDragPosOld = y;
+        this->splitterPos = pos;
+        this->UpdateLayout(hwnd);
+        ::SetCapture(hwnd);
+    }
+
+    void OnLButonUp(HWND hwnd, int, int, UINT)
+    {
+        ::ReleaseCapture();
+        if (this->splitterDragPos >= 0) {
+            if (this->splitterPos != this->splitterDragPos) {
+                this->splitterPos = this->splitterDragPos;
+                this->UpdateLayout(hwnd);
+                ::RedrawWindow(hwnd, NULL, NULL, RDW_ERASE);
+            }
+            this->splitterDragPos = -1;
+        }
+    }
+
+    void OnMouseMove(HWND hwnd, int, int y, UINT keyFlags) throw()
+    {
+        if ((keyFlags & MK_LBUTTON) == 0 || ::GetCapture() != hwnd) {
+            return;
+        }
+
+        int pos = this->CalcSplitterPos(hwnd, y);
+        if (this->splitterDragPos == y) {
+            return;
+        }
+
+        this->splitterDragPos = pos;
+        if (this->splitterDragPos != this->splitterDragPosOld) {
+            this->splitterPos = this->splitterDragPos;
+            this->UpdateLayout(hwnd);
+            ::RedrawWindow(hwnd, NULL, NULL, RDW_ERASE);
+            this->splitterDragPosOld = this->splitterDragPos;
+        }
     }
 
 protected:
@@ -1584,8 +1838,12 @@ public:
         , status()
         , contentView()
         , popup()
+        , monoFont()
         , shown()
-        , splitter()
+        , splitterPos()
+        , splitterDragPos(-1)
+        , splitterDragPosOld(-1)
+        , splitterProportionalPos(-1)
         , listener(this)
     {
     }
@@ -1594,6 +1852,9 @@ public:
     {
         if (this->popup != NULL) {
             ::DestroyMenu(this->popup);
+        }
+        if (this->monoFont != NULL) {
+            DeleteFont(this->monoFont);
         }
     }
 

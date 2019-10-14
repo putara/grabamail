@@ -1,12 +1,15 @@
 // resource
 #define IDR_MAIN                128
+#define IDB_MAILICONS           129
+#define IDS_NOEMAILS            1
 #define IDM_POPUP               101
 #define IDM_FILE                102
 #define IDM_EDIT                103
 #define IDM_VIEW                104
 #define IDM_EXIT_APP            1001
 #define IDM_COPY_NAME           1002
-#define IDM_STATUSBAR           1003
+#define IDM_CLEAR               1003
+#define IDM_STATUSBAR           1011
 
 #define IDA_COPY_NAME           2001
 #define IDA_CLEAR_EDIT          2002
@@ -108,6 +111,8 @@ IDR_MAIN MENUEX DISCARDABLE
     POPUP "&Edit", IDM_EDIT,,, 0
     {
         MENUITEM "&Copy", IDM_COPY_NAME
+        MENUITEM "", -1, MFT_SEPARATOR
+        MENUITEM "Cl&ear", IDM_CLEAR
     }
     POPUP "&View", IDM_VIEW,,, 0
     {
@@ -124,7 +129,14 @@ IDR_MAIN ACCELERATORS DISCARDABLE
     VK_TAB,         IDA_PREV_CONTROL,       VIRTKEY, SHIFT, NOINVERT
 }
 
+STRINGTABLE
+{
+    IDS_NOEMAILS "No mails"
+}
+
 IDR_MAIN ICON "res/app.ico"
+IDB_MAILICONS BITMAP "res/icons.bmp"
+
 
 STRINGTABLE
 {

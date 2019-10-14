@@ -1,20 +1,4 @@
-#if 0
-datetest.exe: datetest.obj
- link /nologo /dynamicbase:no /machine:x86 /map /merge:.rdata=.text /nxcompat /opt:icf /opt:ref /release /out:datetest.exe /debug /PDBALTPATH:"%_PDB%" datetest.obj kernel32.lib
- @-erase datetest.obj > nul 2> nul
- @-erase vc??.pdb > nul 2> nul
-
-datetest.obj: datetest.cpp
- cl /nologo /c /GF /GR- /Gy /MD /O1ib1 /W3 /Zi /D "NDEBUG" /D "_WINDOWS" /D "_UNICODE" /D "UNICODE" datetest.cpp
-
-!IF 0
-#else
-
-#include <stdio.h>
-#include <string.h>
-#include <windows.h>
-#include <intrin.h>
-
+#pragma once
 int getday(const char* date)
 {
     static const char c_days[7][4] = {
@@ -82,7 +66,7 @@ const char* skip_fws(const char* str)
 }
 
 // RFC822, RFC2822
-bool parsedate(__in const char* date, __in const char* format, __out SYSTEMTIME* utc)
+bool ParseDate(__in const char* date, __in const char* format, __out SYSTEMTIME* utc)
 {
     int retval;
     bool neg;
@@ -222,70 +206,50 @@ bool parsedate(__in const char* date, __in const char* format, __out SYSTEMTIME*
     return ::FileTimeToSystemTime(&ft, utc) != FALSE;
 }
 
-int wmain(int, wchar_t**)
+
+class TestDateTime : public UnitTest
 {
-    char buffer[100];
-    SYSTEMTIME st = {};
-    bool retval = parsedate("13 Oct 2019 02:21:54 +1300", "d M Y H:i:s z", &st);
-    if (!retval) {
-        printf("parsedate failed (1)\n");
+public:
+    void Run()
+    {
+        this->TestGood("13 Oct 2019 02:21:54 +1300", "d M Y H:i:s z", "20191012132154");
+        this->TestGood("Fri, 21 Nov 1997 09:55:06 -0600", "D, d M Y H:i:s z", "19971121155506");
     }
-    sprintf_s(buffer, _countof(buffer), "%04u%02u%02u%02u%02u%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-    if (strcmp(buffer, "20191012132154") != 0) {
-        printf("parsedate failed (2)\n");
+
+    void TestGood(const char* input, const char* format, const char* expected)
+    {
+        SYSTEMTIME st = {};
+        bool result = ParseDate(input, format, &st);
+        this->AssertTrue(result, input);
+        char buffer[100];
+        ::sprintf_s(buffer, _countof(buffer), "%04u%02u%02u%02u%02u%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        this->AssertEquals(buffer, expected);
     }
-    printf("%s\n", buffer);
-    printf(": ");
-    while (fgets(buffer, _countof(buffer), stdin) != NULL) {
-        *strchr(buffer, '\n') = 0;
-        if (*buffer == 0) {
-            break;
-        }
-        SYSTEMTIME utc = {};
-        bool retval = parsedate(buffer, "d M Y H:i:s z", &utc);
-        printf("%d ", retval);
-        if (retval) {
-            SYSTEMTIME loc = {};
-            ::SystemTimeToTzSpecificLocalTime(NULL, &utc, &loc);
-            int ret = ::GetDateFormatA(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &loc, NULL, buffer, _countof(buffer));
-            if (ret > 0) {
-                buffer[ret - 1] = ' ';
-                buffer[ret] = 0;
-                ::GetTimeFormatA(LOCALE_USER_DEFAULT, 0/*TIME_FORCE24HOURFORMAT*/, &loc, NULL, buffer + ret, _countof(buffer) - ret);
-                printf("%s", buffer);
+
+    void RunInteractive()
+    {
+        char buffer[100];
+        printf(": ");
+        while (fgets(buffer, _countof(buffer), stdin) != NULL) {
+            *strchr(buffer, '\n') = 0;
+            if (*buffer == 0) {
+                break;
             }
+            SYSTEMTIME utc = {};
+            bool retval = ParseDate(buffer, "d M Y H:i:s z", &utc);
+            printf("%d ", retval);
+            if (retval) {
+                SYSTEMTIME loc = {};
+                ::SystemTimeToTzSpecificLocalTime(NULL, &utc, &loc);
+                int ret = ::GetDateFormatA(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &loc, NULL, buffer, _countof(buffer));
+                if (ret > 0) {
+                    buffer[ret - 1] = ' ';
+                    buffer[ret] = 0;
+                    ::GetTimeFormatA(LOCALE_USER_DEFAULT, 0/*TIME_FORCE24HOURFORMAT*/, &loc, NULL, buffer + ret, _countof(buffer) - ret);
+                    printf("%s", buffer);
+                }
+            }
+            printf("\n: ");
         }
-        printf("\n: ");
     }
-    return 0;
-}
-
-#if defined(_MSC_VER) && defined(_DLL)
-#include <process.h>
-#define _CONSOLE_APP 1
-#pragma comment(linker, "/entry:EntryPoint /subsystem:console")
-EXTERN_C _CRTIMP void __cdecl __set_app_type(int);
-EXTERN_C _CRTIMP void __cdecl __wgetmainargs(int*, wchar_t***, wchar_t***, int, int*);
-
-__declspec(noinline) void IEntryPoint()
-{
-    int argc;
-    wchar_t** argv;
-    wchar_t** envp;
-    int startinfo_newmode;
-    __set_app_type(_CONSOLE_APP);
-    startinfo_newmode = 0;
-    __wgetmainargs(&argc, &argv, &envp, 0, &startinfo_newmode);
-    exit(wmain(argc, argv));
-}
-
-void EntryPoint()
-{
-    __security_init_cookie();
-    IEntryPoint();
-}
-#endif
-
-#endif /*
-!ENDIF
-#*/
+};
