@@ -24,7 +24,7 @@
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "ws2_32.lib")
 
-#pragma warning(disable: 4355)
+#pragma warning(disable: 4127 4355)
 
 // https://blogs.msdn.microsoft.com/oldnewthing/20041025-00/?p=37483/
 extern "C" IMAGE_DOS_HEADER     __ImageBase;
@@ -75,6 +75,16 @@ inline void operator delete(void* ptr) throw()
 inline void operator delete[](void* ptr) throw()
 {
     ::free(ptr);
+}
+
+inline int RECTWIDTH(const RECT& rect) throw()
+{
+    return rect.right - rect.left;
+}
+
+inline int RECTHEIGHT(const RECT& rect) throw()
+{
+    return rect.bottom - rect.top;
 }
 
 void Trace(__in __format_string const char* format, ...)
@@ -992,7 +1002,7 @@ protected:
         WNDCLASS wc = {
             0, sWindowProc, 0, 0,
             HINST_THISCOMPONENT,
-            NULL, ::LoadCursor(NULL, cursor),
+            NULL, ::LoadCursor(NULL, IDC_ARROW),
             0, menu,
             className };
         return ::RegisterClass(&wc);
@@ -1182,6 +1192,331 @@ public:
     }
 };
 
+
+template <class T, bool t_vertical>
+class SplitterWindow
+{
+private:
+    int splitterPos;
+    int splitterDragPos;
+    int splitterDragPosOld;
+    int splitterDragHotspot;
+    int splitterProportionalPos;
+    bool splitterDragging;
+
+    static const int SPLITTER_UNDEF = -0x77;
+    static const int SPLITTER_MIN = 30;
+    static const int SPLITTER_WIDTH = 2 * 2 + 1;
+    static const int SPLITTER_MULTIPLIER = 32768;
+
+    int CalcPos(HWND hwnd, int x, int y) throw()
+    {
+        const RECT rect = static_cast<T*>(this)->GetViewRect(hwnd);
+        int desiredPos, minSize, maxSize;
+        if (t_vertical) {
+            desiredPos = x - rect.left - this->splitterDragHotspot + (SPLITTER_WIDTH / 2);
+            minSize = SPLITTER_MIN;
+            maxSize = RECTWIDTH(rect) - SPLITTER_MIN;
+        } else {
+            desiredPos = y - rect.top - this->splitterDragHotspot + (SPLITTER_WIDTH / 2);
+            minSize = SPLITTER_MIN;
+            maxSize = RECTHEIGHT(rect) - SPLITTER_MIN;
+        }
+        maxSize = __max(maxSize, minSize);
+        return __max(__min(desiredPos, maxSize), minSize);
+    }
+
+    void DrawGhost(HDC hdc, const RECT& rect, int pos) throw()
+    {
+        int x, y, cx, cy;
+        if (t_vertical) {
+            x = rect.left + pos - (SPLITTER_WIDTH / 2);
+            y = rect.top;
+            cx = SPLITTER_WIDTH;
+            cy = RECTHEIGHT(rect);
+        } else {
+            x = rect.left;
+            y = rect.top + pos - (SPLITTER_WIDTH / 2);
+            cx = RECTWIDTH(rect);
+            cy = SPLITTER_WIDTH;
+        }
+        ::PatBlt(hdc, x, y, cx, cy, DSTINVERT);
+    }
+
+    void Draw(HWND hwnd, int splitterPos, int splitterPosOld) throw()
+    {
+        RECT rect = static_cast<T*>(this)->GetViewRect(hwnd);
+        MapWindowRect(hwnd, HWND_DESKTOP, &rect);
+
+        RECT windowRect = {};
+        ::GetWindowRect(hwnd, &windowRect);
+        ::OffsetRect(&rect, -windowRect.left, -windowRect.top);
+
+        HDC hdc = ::GetWindowDC(hwnd);
+        if (hdc != NULL) {
+            if (splitterPosOld != SPLITTER_UNDEF) {
+                this->DrawGhost(hdc, rect, splitterPosOld);
+            }
+            this->DrawGhost(hdc, rect, splitterPos);
+            ::ReleaseDC(hwnd, hdc);
+        }
+    }
+
+    inline static void SetRectLTWH(__out RECT* rect, int left, int top, int width, int height) throw()
+    {
+        rect->left = left;
+        rect->top = top;
+        rect->right = left + __max(0, width);
+        rect->bottom = top + __max(0, height);
+    }
+
+    void ApplyProportionalPos(HWND hwnd) throw()
+    {
+        const RECT rect = static_cast<T*>(this)->GetViewRect(hwnd);
+        if (this->splitterProportionalPos != SPLITTER_UNDEF) {
+            int size, offset;
+            if (t_vertical) {
+                size = RECTWIDTH(rect);
+                offset = rect.left;
+            } else {
+                size = RECTHEIGHT(rect);
+                offset = rect.top;
+            }
+            const int newPos = offset + ::MulDiv(size, this->splitterProportionalPos, SPLITTER_MULTIPLIER);
+            if (t_vertical) {
+                this->splitterPos = this->CalcPos(hwnd, newPos, 0);
+            } else {
+                this->splitterPos = this->CalcPos(hwnd, 0, newPos);
+            }
+            static_cast<T*>(this)->SplitterRepositioned(hwnd);
+        }
+    }
+
+    bool OnSetCursor(HWND hwnd, WPARAM wParam, LPARAM lParam, __out_opt LRESULT* result) throw()
+    {
+        if (reinterpret_cast<HWND>(wParam) == hwnd && LOWORD(lParam) == HTCLIENT) {
+            const DWORD messagePos = ::GetMessagePos();
+            const RECT rect = this->GetSplitterRect(hwnd);
+            POINT pt = { GET_X_LPARAM(messagePos), GET_Y_LPARAM(messagePos) };
+            ::MapWindowPoints(HWND_DESKTOP, hwnd, &pt, 1);
+            if (::PtInRect(&rect, pt)) {
+                HCURSOR hcur = ::LoadCursor(NULL, t_vertical ? IDC_SIZEWE : IDC_SIZENS);
+                ::SetCursor(hcur);
+                *result = TRUE;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool OnSize(HWND hwnd, WPARAM, LPARAM, __out_opt LRESULT*) throw()
+    {
+        this->ApplyProportionalPos(hwnd);
+        return true;
+    }
+
+    bool OnEnterSizeMove(HWND hwnd, WPARAM, LPARAM, __out_opt LRESULT*) throw()
+    {
+        const RECT rect = static_cast<T*>(this)->GetViewRect(hwnd);
+        const int size = t_vertical ? RECTWIDTH(rect) : RECTHEIGHT(rect);
+        if (size > 0) {
+            this->splitterProportionalPos = ::MulDiv(this->splitterPos, SPLITTER_MULTIPLIER, size);
+        } else {
+            this->splitterProportionalPos = SPLITTER_UNDEF;
+        }
+        return true;
+    }
+
+    bool OnExitSizeMove(HWND, WPARAM, LPARAM, __out_opt LRESULT*) throw()
+    {
+        this->splitterProportionalPos = SPLITTER_UNDEF;
+        return true;
+    }
+
+    bool OnLButtonDown(HWND hwnd, WPARAM, LPARAM lParam, __out_opt LRESULT*) throw()
+    {
+        const RECT rect = this->GetSplitterRect(hwnd);
+        const POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (::PtInRect(&rect, pt)) {
+            if (t_vertical) {
+                this->splitterDragHotspot = pt.x - rect.left;
+            } else {
+                this->splitterDragHotspot = pt.y - rect.top;
+            }
+            const int pos = this->CalcPos(hwnd, pt.x, pt.y);
+            this->splitterDragPos = pos;
+            this->splitterDragPosOld = pos;
+            this->splitterDragging = true;
+            this->Draw(hwnd, pos, SPLITTER_UNDEF);
+            static_cast<T*>(this)->SplitterRepositioned(hwnd);
+            ::SetCapture(hwnd);
+            return true;
+        }
+        return false;
+    }
+
+    bool OnLButtonUp(HWND, WPARAM, LPARAM, __out_opt LRESULT*) throw()
+    {
+        if (this->splitterDragging) {
+            ::ReleaseCapture();
+            return true;
+        }
+        return false;
+    }
+
+    bool OnMouseMove(HWND hwnd, WPARAM, LPARAM lParam, __out_opt LRESULT*) throw()
+    {
+        if (this->splitterDragging) {
+            const POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            const int pos = this->CalcPos(hwnd, pt.x, pt.y);
+            if (this->splitterDragPos != pos) {
+                this->splitterDragPos = pos;
+                if (this->splitterDragPos != this->splitterDragPosOld) {
+                    this->Draw(hwnd, this->splitterDragPos, this->splitterDragPosOld);
+                    this->splitterDragPosOld = this->splitterDragPos;
+                    static_cast<T*>(this)->SplitterRepositioned(hwnd);
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    bool OnCaptureChanged(HWND hwnd, WPARAM, LPARAM, __out_opt LRESULT*) throw()
+    {
+        if (::GetCapture() != hwnd && this->splitterDragging) {
+            if (this->splitterDragPos != SPLITTER_UNDEF) {
+                this->Draw(hwnd, this->splitterDragPos, SPLITTER_UNDEF);
+                if (this->splitterPos != this->splitterDragPos) {
+                    this->splitterPos = this->splitterDragPos;
+                    static_cast<T*>(this)->SplitterRepositioned(hwnd);
+                }
+                this->splitterDragPos = SPLITTER_UNDEF;
+            }
+            this->splitterDragHotspot = 0;
+            this->splitterDragging = false;
+        }
+        return true;
+    }
+
+protected:
+    SplitterWindow() throw()
+        : splitterPos()
+        , splitterDragPos(SPLITTER_UNDEF)
+        , splitterDragPosOld(SPLITTER_UNDEF)
+        , splitterDragHotspot()
+        , splitterProportionalPos(SPLITTER_UNDEF)
+        , splitterDragging()
+    {
+    }
+
+    ~SplitterWindow() throw()
+    {
+    }
+
+    RECT GetViewRect(HWND hwnd) throw()
+    {
+        RECT rect = {};
+        return rect;
+    }
+
+    void SplitterRepositioned(HWND hwnd) throw()
+    {
+    }
+
+    void InitSplitter(HWND hwnd, int proportionalPos) throw()
+    {
+        const RECT rect = static_cast<T*>(this)->GetViewRect(hwnd);
+        int cxy = t_vertical ? RECTWIDTH(rect) : RECTHEIGHT(rect);
+        this->splitterPos = ::MulDiv(cxy, proportionalPos, 100);
+        this->splitterDragPos = SPLITTER_UNDEF;
+        this->splitterDragPosOld = SPLITTER_UNDEF;
+        this->splitterProportionalPos = SPLITTER_UNDEF;
+    }
+
+    RECT GetSplitterRect(HWND hwnd, bool drag = false) throw()
+    {
+        const RECT rect = static_cast<T*>(this)->GetViewRect(hwnd);
+        int splitterPos;
+        if (drag && this->splitterDragging) {
+            splitterPos = this->splitterDragPos;
+        } else {
+            splitterPos = this->splitterPos;
+        }
+        RECT splitterRect;
+        if (t_vertical) {
+            SetRectLTWH(&splitterRect,
+                rect.left + splitterPos - (SPLITTER_WIDTH / 2),
+                rect.top,
+                SPLITTER_WIDTH,
+                RECTHEIGHT(rect));
+        } else {
+            SetRectLTWH(&splitterRect,
+                rect.left,
+                rect.top + splitterPos - (SPLITTER_WIDTH / 2),
+                RECTWIDTH(rect),
+                SPLITTER_WIDTH);
+        }
+        return splitterRect;
+    }
+
+    void GetChildRects(HWND hwnd, __out_ecount(2) RECT (&childRects)[2]) throw()
+    {
+        const RECT rect = static_cast<T*>(this)->GetViewRect(hwnd);
+        const int splitterPos = this->splitterPos;
+        if (t_vertical) {
+            const int size = RECTHEIGHT(rect);
+            SetRectLTWH(&childRects[0],
+                rect.left,
+                rect.top,
+                splitterPos - (SPLITTER_WIDTH / 2),
+                size);
+            SetRectLTWH(&childRects[1],
+                rect.left + splitterPos + (SPLITTER_WIDTH / 2),
+                rect.top,
+                RECTWIDTH(rect) - splitterPos - (SPLITTER_WIDTH / 2),
+                size);
+        } else {
+            const int size = RECTWIDTH(rect);
+            SetRectLTWH(&childRects[0],
+                rect.left,
+                rect.top,
+                size,
+                splitterPos - (SPLITTER_WIDTH / 2));
+            SetRectLTWH(&childRects[1],
+                rect.left,
+                rect.top + splitterPos + (SPLITTER_WIDTH / 2),
+                size,
+                RECTHEIGHT(rect) - splitterPos - (SPLITTER_WIDTH / 2));
+        }
+    }
+
+    bool HandleWindowMessages(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, __out LRESULT* result) throw()
+    {
+        *result = 0;
+        switch (message) {
+        case WM_SETCURSOR:
+            return this->OnSetCursor(hwnd, wParam, lParam, result);
+        case WM_SIZE:
+            return this->OnSize(hwnd, wParam, lParam, result);
+        case WM_ENTERSIZEMOVE:
+            return this->OnEnterSizeMove(hwnd, wParam, lParam, result);
+        case WM_EXITSIZEMOVE:
+            return this->OnExitSizeMove(hwnd, wParam, lParam, result);
+        case WM_LBUTTONDOWN:
+            return this->OnLButtonDown(hwnd, wParam, lParam, result);
+        case WM_LBUTTONUP:
+            return this->OnLButtonUp(hwnd, wParam, lParam, result);
+        case WM_MOUSEMOVE:
+            return this->OnMouseMove(hwnd, wParam, lParam, result);
+        case WM_CAPTURECHANGED:
+            return this->OnCaptureChanged(hwnd, wParam, lParam, result);
+        }
+        return false;
+    }
+};
+
+
 #include "res.rc"
 
 enum ControlID
@@ -1193,10 +1528,15 @@ enum ControlID
     IDC_LAST,
 };
 
-class MainWindow : public BaseWindow<MainWindow>, public IMessageSink
+class MainWindow : public BaseWindow<MainWindow>, public SplitterWindow<MainWindow, false>, public IMessageSink
 {
 private:
     friend BaseWindow<MainWindow>;
+    friend SplitterWindow<MainWindow, false>;
+
+    typedef BaseWindow<MainWindow> base;
+    typedef SplitterWindow<MainWindow, false> splitter;
+
     typedef PtrArray<MailMessage, 16, TPtrArrayAutoDeleteHelper<MailMessage>> MailMessageArray;
     typedef PtrArray<MailMessage, 16, TPtrArrayDestroyHelper<MailMessage>> FilteredMailMessageArray;
 
@@ -1218,10 +1558,6 @@ private:
     HMENU popup;
     HFONT monoFont;
     bool shown;
-    int splitterPos;
-    int splitterDragPos;
-    int splitterDragPosOld;
-    int splitterProportionalPos;
     SockerListener listener;
     MailMessageArray messages;
     FilteredMailMessageArray filter;
@@ -1302,6 +1638,20 @@ private:
 
         StatusBar::SetText(this->status, StatusBar::PART_STAT, NULL);
         return hr;
+    }
+
+    // called by SplitterWindow
+    RECT GetViewRect(HWND hwnd) throw()
+    {
+        RECT rect = {};
+        ::GetEffectiveClientRect(hwnd, &rect, this->ctlArray);
+        return rect;
+    }
+
+    void SplitterRepositioned(HWND hwnd) throw()
+    {
+        this->UpdateLayout(hwnd);
+        ::RedrawWindow(hwnd, NULL, NULL, RDW_ERASE);
     }
 
     void PopulateItems(HWND hwnd) throw()
@@ -1394,14 +1744,18 @@ private:
     {
         ::SendMessage(this->searchEdit, WM_SIZE, 0, 0);
         ::SendMessage(this->status, WM_SIZE, 0, 0);
-        RECT rect;
-        ::GetEffectiveClientRect(hwnd, &rect, this->ctlArray);
-        ::MoveWindow(this->listView, rect.left, rect.top, rect.right - rect.left, this->splitterPos - rect.top, TRUE);
-        ::MoveWindow(this->contentView, rect.left, this->splitterPos + SPLITTER_HEIGHT, rect.right - rect.left, rect.bottom - this->splitterPos - SPLITTER_HEIGHT, TRUE);
+
+        RECT rects[2];
+        splitter::GetChildRects(hwnd, rects);
+        ::MoveWindow(this->listView, rects[0].left, rects[0].top, RECTWIDTH(rects[0]), RECTHEIGHT(rects[0]), TRUE);
+        ::MoveWindow(this->contentView, rects[1].left, rects[1].top, RECTWIDTH(rects[1]), RECTHEIGHT(rects[1]), TRUE);
     }
 
     LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) throw()
     {
+        LRESULT lRet;
+        bool handled = splitter::HandleWindowMessages(hwnd, message, wParam, lParam, &lRet);
+
         switch (message) {
         HANDLE_MSG(hwnd, WM_CREATE, OnCreate);
         HANDLE_MSG(hwnd, WM_DESTROY, OnDestroy);
@@ -1415,9 +1769,10 @@ private:
         HANDLE_MSG(hwnd, WM_INITMENU, OnInitMenu);
         HANDLE_MSG(hwnd, WM_INITMENUPOPUP, OnInitMenuPopup);
         HANDLE_MSG(hwnd, WM_CONTEXTMENU, OnContextMenu);
-        HANDLE_MSG(hwnd, WM_MOUSEMOVE, OnMouseMove);
-        HANDLE_MSG(hwnd, WM_LBUTTONDOWN, OnLButtonDown);
-        HANDLE_MSG(hwnd, WM_LBUTTONUP, OnLButonUp);
+        }
+
+        if (handled) {
+            return lRet;
         }
         return ::DefWindowProc(hwnd, message, wParam, lParam);
     }
@@ -1475,9 +1830,7 @@ private:
         this->ctlArray[6] = 0;
         this->ctlArray[7] = 0;
 
-        RECT rect = {};
-        ::GetEffectiveClientRect(hwnd, &rect, this->ctlArray);
-        this->splitterPos = rect.top + (rect.bottom - rect.top + 2) / 3;
+        splitter::InitSplitter(hwnd, 33);
 
         ::SetWindowTheme(this->listView, L"Explorer", NULL);
         ListView_SetExtendedListViewStyle(this->listView, LVS_EX_FULLROWSELECT | LVS_EX_INFOTIP | LVS_EX_UNDERLINEHOT | LVS_EX_DOUBLEBUFFER | LVS_EX_JUSTIFYCOLUMNS | LVS_EX_AUTOSIZECOLUMNS | LVS_EX_COLUMNSNAPPOINTS);
@@ -1610,16 +1963,14 @@ private:
 
     BOOL OnEraseBackground(HWND hwnd, HDC hdc) throw()
     {
-        RECT rect = {};
-        ::GetClientRect(hwnd, &rect);
+        const RECT rect = splitter::GetSplitterRect(hwnd);
         HBRUSH oldbrush = SelectBrush(hdc, GetStockBrush(DC_BRUSH));
-        COLORREF oldcolour = SetDCBrushColor(hdc, ::GetSysColor(COLOR_WINDOW));
-        ::PatBlt(hdc, 0, this->splitterPos, rect.right, SPLITTER_HEIGHT, PATCOPY);
+        COLORREF oldcolour = ::SetDCBrushColor(hdc, ::GetSysColor(COLOR_WINDOW));
+        ::PatBlt(hdc, rect.left, rect.top, RECTWIDTH(rect), RECTHEIGHT(rect), PATCOPY);
         COLORREF colour = BlendColor_1_1(::GetSysColor(COLOR_WINDOW), ::GetSysColor(COLOR_BTNFACE));
-        SetDCBrushColor(hdc, colour);
-        ::PatBlt(hdc, 0, this->splitterPos + SPLITTER_HEIGHT / 2, rect.right, 1, PATCOPY);
-        rect.bottom = rect.top + 1;
-        SetDCBrushColor(hdc, oldcolour);
+        ::SetDCBrushColor(hdc, colour);
+        ::PatBlt(hdc, rect.left, rect.top + RECTHEIGHT(rect) / 2, RECTWIDTH(rect), 1, PATCOPY);
+        ::SetDCBrushColor(hdc, oldcolour);
         SelectBrush(hdc, oldbrush);
         return true;
     }
@@ -1763,64 +2114,6 @@ private:
         ::TrackPopupMenuEx(this->popup, TPM_RIGHTBUTTON | TPM_LEFTBUTTON, pt.x, pt.y, hwnd, NULL);
     }
 
-    int CalcSplitterPos(HWND hwnd, int pos) throw()
-    {
-        const int SPLITTER_MIN = 70;
-        if (pos < SPLITTER_MIN) {
-            return SPLITTER_MIN;
-        }
-        RECT rect = {};
-        GetClientRect(hwnd, &rect);
-        rect.bottom -= SPLITTER_MIN;
-        if (pos > rect.bottom) {
-            return rect.bottom;
-        }
-        return pos;
-    }
-
-    void OnLButtonDown(HWND hwnd, BOOL, int, int y, UINT) throw()
-    {
-        const int pos = this->CalcSplitterPos(hwnd, y);
-        this->splitterDragPos = y;
-        this->splitterDragPosOld = y;
-        this->splitterPos = pos;
-        this->UpdateLayout(hwnd);
-        ::SetCapture(hwnd);
-    }
-
-    void OnLButonUp(HWND hwnd, int, int, UINT)
-    {
-        ::ReleaseCapture();
-        if (this->splitterDragPos >= 0) {
-            if (this->splitterPos != this->splitterDragPos) {
-                this->splitterPos = this->splitterDragPos;
-                this->UpdateLayout(hwnd);
-                ::RedrawWindow(hwnd, NULL, NULL, RDW_ERASE);
-            }
-            this->splitterDragPos = -1;
-        }
-    }
-
-    void OnMouseMove(HWND hwnd, int, int y, UINT keyFlags) throw()
-    {
-        if ((keyFlags & MK_LBUTTON) == 0 || ::GetCapture() != hwnd) {
-            return;
-        }
-
-        int pos = this->CalcSplitterPos(hwnd, y);
-        if (this->splitterDragPos == y) {
-            return;
-        }
-
-        this->splitterDragPos = pos;
-        if (this->splitterDragPos != this->splitterDragPosOld) {
-            this->splitterPos = this->splitterDragPos;
-            this->UpdateLayout(hwnd);
-            ::RedrawWindow(hwnd, NULL, NULL, RDW_ERASE);
-            this->splitterDragPosOld = this->splitterDragPos;
-        }
-    }
-
 protected:
     virtual void GotMail(MailMessage* message)
     {
@@ -1840,10 +2133,6 @@ public:
         , popup()
         , monoFont()
         , shown()
-        , splitterPos()
-        , splitterDragPos(-1)
-        , splitterDragPosOld(-1)
-        , splitterProportionalPos(-1)
         , listener(this)
     {
     }
@@ -1865,14 +2154,14 @@ public:
             0, NULL, 0, 0,
             HINST_THISCOMPONENT,
             ::LoadIcon(HINST_THISCOMPONENT, MAKEINTRESOURCE(IDR_MAIN)),
-            ::LoadCursor(NULL, IDC_SIZENS),
+            NULL,
             0, MAKEINTRESOURCE(IDR_MAIN),
             MAKEINTATOM(777) };
-        const ATOM atom = __super::Register(&wc);
+        const ATOM atom = base::Register(&wc);
         if (atom == 0) {
             return NULL;
         }
-        return __super::Create(atom, L"Grabamail");
+        return base::Create(atom, L"Grabamail");
     }
 };
 
