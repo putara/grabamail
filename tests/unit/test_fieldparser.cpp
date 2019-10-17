@@ -1,5 +1,10 @@
-#pragma once
+#include <TestHarness.h>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <intrin.h>
 
 size_t __cdecl my_strnlen(__in_ecount(cchMax) LPCSTR p, size_t cchMax)
 {
@@ -67,22 +72,21 @@ bool ParseField(__inout char* string, __deref_out char** identifier, __deref_out
 }
 
 
-class TestFieldParser : public UnitTest
+TEST(Good, TestFieldParser)
 {
-public:
-    void Run()
-    {
-        this->TestGood("Subject: This\r\n is a test", "Subject", "This is a test");
-    }
-
-    void TestGood(const char* input, const char* efield, const char* evalue)
-    {
-        char *rfield = NULL, *rvalue = NULL;
+    static const char* c_dataSet[][3] = {
+        { "Subject: This\r\n is a test", "Subject", "This is a test" },
+    };
+    for (size_t i = 0; i < _countof(c_dataSet); i++) {
+        const char* input = c_dataSet[i][0];
+        const char* exfld = c_dataSet[i][1];
+        const char* exval = c_dataSet[i][2];
+        char *actualfld = NULL, *actualval = NULL;
         char* dup = ::strdup(input);
-        bool result = ParseField(dup, &rfield, &rvalue);
-        this->AssertTrue(result, input);
-        this->AssertEquals(rfield, efield);
-        this->AssertEquals(rvalue, evalue);
+        bool result = ParseField(dup, &actualfld, &actualval);
+        CHECK_TRUE(result);
+        STRINGS_EQUAL(actualfld, exfld);
+        STRINGS_EQUAL(actualval, exval);
         ::free(dup);
     }
-};
+}

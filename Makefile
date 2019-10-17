@@ -66,5 +66,5 @@ cleanobjonly:
 .rc{$(INTDIR)}.res:
  $(RC) $(RFLAGS) /fo$@ $<
 
-"$(INTDIR)\main.obj": main.cpp utils.h res.rc
+"$(INTDIR)\main.obj": main.cpp utils.h option.h res.rc
 "$(INTDIR)\utils.obj": utils.cpp utils.h

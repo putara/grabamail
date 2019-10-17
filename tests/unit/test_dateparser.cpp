@@ -1,4 +1,11 @@
-#pragma once
+#include <TestHarness.h>
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <intrin.h>
+
 int getday(const char* date)
 {
     static const char c_days[7][4] = {
@@ -207,49 +214,51 @@ bool ParseDate(__in const char* date, __in const char* format, __out SYSTEMTIME*
 }
 
 
-class TestDateTime : public UnitTest
+TEST(Good, TestDateTimeParser)
 {
-public:
-    void Run()
-    {
-        this->TestGood("13 Oct 2019 02:21:54 +1300", "d M Y H:i:s z", "20191012132154");
-        this->TestGood("Fri, 21 Nov 1997 09:55:06 -0600", "D, d M Y H:i:s z", "19971121155506");
-    }
-
-    void TestGood(const char* input, const char* format, const char* expected)
-    {
+    static const char* c_dataSet[][3] = {
+        { "13 Oct 2019 02:21:54 +1300", "d M Y H:i:s z", "20191012132154" },
+        { "Fri, 21 Nov 1997 09:55:06 -0600", "D, d M Y H:i:s z", "19971121155506" },
+    };
+    for (size_t i = 0; i < _countof(c_dataSet); i++) {
+        const char* input = c_dataSet[i][0];
+        const char* format = c_dataSet[i][1];
+        const char* expected = c_dataSet[i][2];
         SYSTEMTIME st = {};
         bool result = ParseDate(input, format, &st);
-        this->AssertTrue(result, input);
+        CHECK_TRUE(result);
         char buffer[100];
         ::sprintf_s(buffer, _countof(buffer), "%04u%02u%02u%02u%02u%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-        this->AssertEquals(buffer, expected);
+        STRINGS_EQUAL(buffer, expected);
     }
+}
 
-    void RunInteractive()
-    {
-        char buffer[100];
-        printf(": ");
-        while (fgets(buffer, _countof(buffer), stdin) != NULL) {
-            *strchr(buffer, '\n') = 0;
-            if (*buffer == 0) {
-                break;
-            }
-            SYSTEMTIME utc = {};
-            bool retval = ParseDate(buffer, "d M Y H:i:s z", &utc);
-            printf("%d ", retval);
-            if (retval) {
-                SYSTEMTIME loc = {};
-                ::SystemTimeToTzSpecificLocalTime(NULL, &utc, &loc);
-                int ret = ::GetDateFormatA(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &loc, NULL, buffer, _countof(buffer));
-                if (ret > 0) {
-                    buffer[ret - 1] = ' ';
-                    buffer[ret] = 0;
-                    ::GetTimeFormatA(LOCALE_USER_DEFAULT, 0/*TIME_FORCE24HOURFORMAT*/, &loc, NULL, buffer + ret, _countof(buffer) - ret);
-                    printf("%s", buffer);
-                }
-            }
-            printf("\n: ");
+
+#if 0
+void RunInteractive()
+{
+    char buffer[100];
+    printf(": ");
+    while (fgets(buffer, _countof(buffer), stdin) != NULL) {
+        *strchr(buffer, '\n') = 0;
+        if (*buffer == 0) {
+            break;
         }
+        SYSTEMTIME utc = {};
+        bool retval = ParseDate(buffer, "d M Y H:i:s z", &utc);
+        printf("%d ", retval);
+        if (retval) {
+            SYSTEMTIME loc = {};
+            ::SystemTimeToTzSpecificLocalTime(NULL, &utc, &loc);
+            int ret = ::GetDateFormatA(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &loc, NULL, buffer, _countof(buffer));
+            if (ret > 0) {
+                buffer[ret - 1] = ' ';
+                buffer[ret] = 0;
+                ::GetTimeFormatA(LOCALE_USER_DEFAULT, 0/*TIME_FORCE24HOURFORMAT*/, &loc, NULL, buffer + ret, _countof(buffer) - ret);
+                printf("%s", buffer);
+            }
+        }
+        printf("\n: ");
     }
-};
+}
+#endif

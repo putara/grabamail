@@ -17,7 +17,7 @@
 #include <uxtheme.h>
 #include <tchar.h>
 
-//#define USETRACE
+#define USETRACE
 
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "comctl32.lib")
@@ -460,6 +460,15 @@ enum ReplyCommand
 
 class MailMessage
 {
+public:
+    enum APPENDRESULT
+    {
+        Ok,
+        End,
+        BadCmd,
+        NoMem,
+    };
+
 private:
     char* sender;
     char* recipient;
@@ -560,32 +569,45 @@ public:
         this->inData = true;
         return true;
     }
-    bool AppendBody(const char* data) throw()
+    APPENDRESULT AppendBody(const char* data) throw()
     {
         if (this->inData == false) {
-            return false;
+            return BadCmd;
         }
-        size_t cc = this->body ? ::strlen(this->body) : 0;
-        size_t ca = ::strlen(data);
-        if (SIZE_MAX - cc <= ca) {
-            return false;
+        size_t curlen = this->body ? ::strlen(this->body) : 0;
+        size_t addlen = ::strlen(data);
+        if (SIZE_MAX - curlen <= addlen) {
+            return NoMem;
         }
-        char* dst = static_cast<char*>(::realloc(this->body, cc + ca + 1));
+        char* dst = static_cast<char*>(::realloc(this->body, curlen + addlen + 1));
         if (dst == NULL) {
+            return NoMem;
+        }
+        ::memcpy(dst + curlen, data, addlen);
+        dst[curlen + addlen] = 0;
+        this->body = dst;
+        if (this->EndOfBody()) {
+            return End;
+        }
+        return Ok;
+    }
+    bool EndOfBody() throw()
+    {
+        if (this->body == NULL) {
             return false;
         }
-        ::memcpy(dst + cc, data, ca);
-        dst[cc + ca] = 0;
-        this->body = dst;
-        return true;
-    }
-    bool EndBody(const char* data) throw()
-    {
-        bool ret = this->AppendBody(data);
-        ::GetSystemTimeAsFileTime(&this->time);
-        this->inData = false;
-        this->ParseSubject();
-        return ret;
+        char* p = this->body;
+        while (*p != 0) {
+            if (::strncmp(p, "\r\n.\r\n", 5) == 0) {
+                *p = 0;
+                ::GetSystemTimeAsFileTime(&this->time);
+                this->inData = false;
+                this->ParseSubject();
+                return true;
+            }
+            p++;
+        }
+        return false;
     }
     static wchar_t* ParseUnstructured(__inout wchar_t* string)
     {
@@ -672,6 +694,7 @@ private:
     volatile BOOL quit;
     IMessageSink* sink;
     HANDLE thread;
+    MailMessage* message;
 
     SockerListener(const SockerListener&);
     SockerListener& operator =(const SockerListener&);
@@ -681,6 +704,7 @@ public:
         : quit()
         , sink(ms)
         , thread()
+        , message()
     {
     }
 
@@ -799,8 +823,9 @@ private:
         return this->Echo(ReplyCmd_InvalidParam);
     }
 
-    bool ThreadFunc() throw()
+    bool OpenSession() throw()
     {
+        this->clientSocket.Close();
         if (this->clientSocket.Accept(this->listenSocket) == false) {
             serror("accept");
             return false;
@@ -818,9 +843,34 @@ private:
             return false;
         }
 
-        MailMessage* message = NULL;
+        return true;
+    }
+
+    void CloseSession() throw()
+    {
+        delete this->message;
+        this->message = NULL;
+        this->clientSocket.Shutdown(SD_SEND);
+        this->clientSocket.Close();
+    }
+
+    void PassMessage() throw()
+    {
+        this->sink->GotMail(this->message);
+        this->message = NULL;
+    }
+
+    bool ThreadFunc() throw()
+    {
+        this->message = NULL;
         bool inDataLoop = false;
         while (this->quit == false) {
+            if (this->clientSocket.IsValid() == false) {
+                if (this->OpenSession() == false) {
+                    return false;
+                }
+            }
+
             TRACE("receiving...\n");
             char buffer[513];
             int retval = this->clientSocket.Recv(buffer, sizeof(buffer) - 1);
@@ -830,8 +880,10 @@ private:
             }
             if (retval == 0) {
                 TRACE("Client closed connection\n");
+                this->CloseSession();
                 continue;
             }
+
             buffer[retval] = 0;
             TRACE("> %hs\n", buffer);
             if (inDataLoop == false) {
@@ -839,11 +891,11 @@ private:
                     retval = this->EchoOk();
                 } else if (CMDEQ(buffer, "QUIT")) {
                     retval = this->Echo(ReplyCmd_Closing);
-                    this->quit = true;
+                    this->CloseSession();
                 } else if (CMDEQ(buffer, "MAIL")) {
-                    delete message;
-                    message = new MailMessage();
-                    if (message != NULL) {
+                    delete this->message;
+                    this->message = new MailMessage();
+                    if (this->message != NULL) {
                         if (message->SetSender(buffer + 5)) {
                             retval = this->EchoOk();
                         } else {
@@ -875,28 +927,28 @@ private:
                     retval = this->Echo(ReplyCmd_NotImpl);
                 }
             } else {
-                if (retval >= 5 && strcmp(buffer + retval - 5, "\r\n.\r\n") == 0) {
-                    buffer[retval - 5] = 0;
-                    if (message->EndBody(buffer)) {
-                        this->sink->GotMail(message);
-                        message = NULL;
-                        retval = this->EchoOk();
-                    } else {
-                        retval = this->EchoOOM();
-                    }
-                    inDataLoop = false;
-                } else if (message->AppendBody(buffer)) {
+                switch (this->message->AppendBody(buffer)) {
+                case MailMessage::Ok:
                     continue;
-                } else {
+                case MailMessage::NoMem:
                     retval = this->EchoOOM();
+                    break;
+                case MailMessage::End:
+                    this->PassMessage();
+                    retval = this->EchoOk();
+                    inDataLoop = false;
+                    break;
+                case MailMessage::BadCmd:
+                    retval = this->Echo(ReplyCmd_BadSeqCmd);
+                    break;
                 }
             }
             if (retval <= 0) {
                 serror("send");
-                break;
+                this->CloseSession();
             }
         }
-        this->clientSocket.Shutdown(SD_SEND);
+        this->CloseSession();
         return 0;
     }
 };
@@ -2165,24 +2217,56 @@ public:
     }
 };
 
-class CAllocConsole
+class Console
 {
+private:
+    BOOL alloc;
+
 public:
-    CAllocConsole() throw()
+    Console() throw()
+        : alloc()
     {
-        ::AllocConsole();
     }
-    ~CAllocConsole() throw()
+    ~Console() throw()
     {
-        ::FreeConsole();
+        this->Free();
+    }
+    BOOL Allocate() throw()
+    {
+        if (this->alloc) {
+            return FALSE;
+        }
+        this->alloc = ::AllocConsole();
+        return this->alloc;
+    }
+    void Free() throw()
+    {
+        if (this->alloc) {
+            ::FreeConsole();
+            this->alloc = false;
+        }
     }
 };
+
+#include "option.h"
 
 int WINAPI _tWinMain(HINSTANCE, HINSTANCE, LPTSTR, int)
 {
 #ifdef USETRACE
-    CAllocConsole con;
+    Console con;
 #endif
+
+    option opt;
+    int ch;
+    while ((ch = opt.getopt(__argc, __wargv, L"d")) != -1) {
+        switch (ch) {
+        case 'd':
+#ifdef USETRACE
+            con.Allocate();
+#endif
+            break;
+        }
+    }
 
     WSAInitialiser init(MAKEWORD(2, 2));
     if (init == SOCKET_ERROR) {
