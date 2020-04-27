@@ -1,11 +1,9 @@
 #include <TestHarness.h>
 #include <TestResult.h>
 
-#include <Failure.cpp>
-#include <SimpleString.cpp>
 #include <Test.cpp>
-#include <TestRegistry.cpp>
-#include <TestResult.cpp>
+
+using namespace CppUnitLite;
 
 int main()
 {

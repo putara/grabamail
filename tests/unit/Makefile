@@ -11,19 +11,16 @@ TARGET_OBJS =\
  "$(INTDIR)\test_fieldparser.obj"
 
 CPPUNITLITE_H =\
- "../../lib/CppUnitLite/Failure.h" \
- "../../lib/CppUnitLite/SimpleString.h" \
- "../../lib/CppUnitLite/Test.h" \
- "../../lib/CppUnitLite/TestHarness.h" \
- "../../lib/CppUnitLite/TestRegistry.h" \
- "../../lib/CppUnitLite/TestResult.h"
+ "../../lib/CppUnitLite/lib/Failure.h" \
+ "../../lib/CppUnitLite/lib/SimpleString.h" \
+ "../../lib/CppUnitLite/lib/Test.h" \
+ "../../lib/CppUnitLite/lib/TestHarness.h" \
+ "../../lib/CppUnitLite/lib/TestRegistry.h" \
+ "../../lib/CppUnitLite/lib/TestResult.h" \
+ "../../lib/CppUnitLite/lib/TestTraits.h"
 
 CPPUNITLITE_CPP =\
- "../../lib/CppUnitLite/Failure.cpp" \
- "../../lib/CppUnitLite/SimpleString.cpp" \
- "../../lib/CppUnitLite/Test.cpp" \
- "../../lib/CppUnitLite/TestRegistry.cpp" \
- "../../lib/CppUnitLite/TestResult.cpp"
+ "../../lib/CppUnitLite/lib/Test.cpp"
 
 CC = cl.exe
 LD = link.exe
@@ -34,7 +31,7 @@ TARGET_ARCH = x64
 TARGET_ARCH = x86
 !endif
 
-CFLAGS = /nologo /c /GF /GR- /GS /Gy /MD /O1ib1 /W3 /Zi /fp:fast /FAcs /Fa"$(INTDIR)/" /Fo"$(INTDIR)/" /Fd"$(INTDIR)/" /I"../../lib/CppUnitLite/"
+CFLAGS = /nologo /c /GF /GR- /GS /Gy /MD /O1ib1 /W3 /Zi /fp:fast /FAcs /Fa"$(INTDIR)/" /Fo"$(INTDIR)/" /Fd"$(INTDIR)/" /I"../../lib/CppUnitLite/lib/"
 LDFLAGS = /nologo /dynamicbase:no /machine:$(TARGET_ARCH) /map:"$(TARGET_MAP)" /nxcompat /opt:noicf /opt:ref /release /debug /PDBALTPATH:"%_PDB%" /subsystem:console
 
 CDEFS = /D "NDEBUG" /D "_STATIC_CPPLIB" /D "_CONSOLE" /D "_WINDOWS" /D "_UNICODE" /D "UNICODE"

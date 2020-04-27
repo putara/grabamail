@@ -85,8 +85,8 @@ TEST(Good, TestFieldParser)
         char* dup = ::strdup(input);
         bool result = ParseField(dup, &actualfld, &actualval);
         CHECK_TRUE(result);
-        STRINGS_EQUAL(actualfld, exfld);
-        STRINGS_EQUAL(actualval, exval);
+        CHECK_STRINGS_EQUAL(actualfld, exfld);
+        CHECK_STRINGS_EQUAL(actualval, exval);
         ::free(dup);
     }
 }

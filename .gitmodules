@@ -1,0 +1,3 @@
+[submodule "lib/CppUnitLite"]
+	path = lib/CppUnitLite
+	url = https://github.com/putara/CppUnitLite.git

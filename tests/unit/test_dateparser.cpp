@@ -229,7 +229,7 @@ TEST(Good, TestDateTimeParser)
         CHECK_TRUE(result);
         char buffer[100];
         ::sprintf_s(buffer, _countof(buffer), "%04u%02u%02u%02u%02u%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-        STRINGS_EQUAL(buffer, expected);
+        CHECK_STRINGS_EQUAL(buffer, expected);
     }
 }
 
