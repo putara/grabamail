@@ -6,10 +6,12 @@
 #define IDM_FILE                102
 #define IDM_EDIT                103
 #define IDM_VIEW                104
+#define IDM_TOOLS               104
 #define IDM_EXIT_APP            1001
 #define IDM_COPY_NAME           1002
 #define IDM_CLEAR               1003
 #define IDM_STATUSBAR           1011
+#define IDM_OPTIONS             1012
 
 #define IDA_COPY_NAME           2001
 #define IDA_CLEAR_EDIT          2002
@@ -117,6 +119,10 @@ IDR_MAIN MENUEX DISCARDABLE
     POPUP "&View", IDM_VIEW,,, 0
     {
         MENUITEM "&Status bar", IDM_STATUSBAR,, MFS_CHECKED
+    }
+    POPUP "&Tools", IDM_TOOLS,,, 0
+    {
+        MENUITEM "&Options...", IDM_OPTIONS
     }
 }
 

@@ -7,6 +7,7 @@
 #include <sdkddkver.h>
 #include <windows.h>
 #include <windowsx.h>
+#include <commdlg.h>
 #include <commctrl.h>
 #include <shlwapi.h>
 #include <winsock2.h>
@@ -20,6 +21,7 @@
 #define USETRACE
 
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -1918,6 +1920,9 @@ private:
         case IDM_STATUSBAR:
             this->OnCommandStatusBar(hwnd, id);
             break;
+        case IDM_OPTIONS:
+            this->OnCommandOptions(hwnd, id);
+            break;
         case IDA_FOCUS_EDIT:
             this->OnCommandFocusEdit(hwnd, id);
             break;
@@ -1982,6 +1987,23 @@ private:
     {
         ::ShowHideMenuCtl(hwnd, id, this->ctlArray);
         this->UpdateLayout(hwnd);
+    }
+
+    void OnCommandOptions(HWND hwnd, int) throw()
+    {
+        // TODO: Open an options dialog instead of a font dialog
+        LOGFONT lf = {};
+        ::GetObject(this->monoFont, sizeof(lf), &lf);
+        CHOOSEFONT cf = { sizeof(cf) };
+        cf.hwndOwner = hwnd;
+        cf.lpLogFont = &lf;
+        cf.Flags = CF_TTONLY | CF_FIXEDPITCHONLY | CF_INITTOLOGFONTSTRUCT;
+        if (::ChooseFont(&cf)) {
+            HFONT font = ::CreateFontIndirect(&lf);
+            SetWindowFont(this->contentView, font, true);
+            DeleteFont(this->monoFont);
+            this->monoFont = font;
+        }
     }
 
     void OnCommandFocusEdit(HWND, int) throw()
