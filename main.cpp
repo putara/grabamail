@@ -1221,9 +1221,9 @@ private:
         int x = rect.right;
         int widths[PART_LAST];
         widths[PART_ALL] = x;
-        x -= cx * 20;
+        x -= cx * 24;
         widths[PART_SEL] = x;
-        x -= cx * 20;
+        x -= cx * 24;
         widths[PART_STAT] = x;
         ::SendMessage(hwnd, SB_SETPARTS, PART_LAST, reinterpret_cast<LPARAM>(widths));
     }
@@ -1624,7 +1624,9 @@ private:
         StatusBar::SetText(this->status, StatusBar::PART_STAT, L"Initialising...");
 
         LOGFONTW lf = {};
-        ::GetObjectW(GetStockFont(SYSTEM_FIXED_FONT), sizeof(lf), &lf);
+        HDC hdc = ::GetDC(hwnd);
+        lf.lfHeight = -::MulDiv(21, ::GetDeviceCaps(hdc, LOGPIXELSY), 144); // 10.5 pt
+        ::ReleaseDC(hwnd, hdc);
         lf.lfWidth = 0;
         lf.lfWeight = 0;
         lf.lfCharSet = ANSI_CHARSET;
@@ -1635,7 +1637,7 @@ private:
         SetWindowFont(this->contentView, this->monoFont, false);
 
         PCZZTSTR colNames = _T("Subject\0Sender\0Recipient\0Time\0Size\0");
-        int colWidths[] = { 40, 20, 20, 15, 5 };
+        int colWidths[] = { 32, 20, 20, 20, 8 };
 
         RECT rect = {};
         ::GetClientRect(this->listView, &rect);
